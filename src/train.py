@@ -1,11 +1,15 @@
 import argparse
-from typing import Any, Dict, List, Union, cast
+import datetime
+import os
+from typing import Any, Dict, List, Optional, cast
 
 import torch
 from datasets import load_dataset
 from peft import LoraConfig, TaskType, get_peft_model
 from transformers import DataCollatorForLanguageModeling, Trainer, TrainingArguments
 
+# Import wandb for experiment tracking
+import wandb
 from src.load_model import load_llama_model
 
 
@@ -97,6 +101,9 @@ def train_model(
     lora_r: int = 16,
     lora_alpha: int = 32,
     disable_quantization: bool = False,
+    use_wandb: bool = True,
+    wandb_project: Optional[str] = "llama-grpo-math",
+    wandb_name: Optional[str] = None,
 ) -> None:
     """
     Train a model using LoRA fine-tuning.
@@ -115,7 +122,37 @@ def train_model(
         lora_r: Rank of LoRA adapters
         lora_alpha: Alpha parameter for LoRA
         disable_quantization: If True, disable quantization to avoid bitsandbytes dependency
+        use_wandb: Whether to use wandb for logging
+        wandb_project: Wandb project name
+        wandb_name: Wandb run name, defaults to a timestamp if not provided
     """
+    # Initialize wandb if enabled
+    if use_wandb:
+        if not wandb_name:
+            wandb_name = f"lora-finetune-{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+
+        run = wandb.init(  # type: ignore
+            project=wandb_project,
+            name=wandb_name,
+            config={
+                "base_model": base_model,
+                "dataset": dataset_name,
+                "dataset_split": dataset_split,
+                "sample_size": sample_size,
+                "num_train_epochs": num_train_epochs,
+                "batch_size": batch_size,
+                "gradient_accumulation_steps": gradient_accumulation_steps,
+                "learning_rate": learning_rate,
+                "lora_r": lora_r,
+                "lora_alpha": lora_alpha,
+                "device": device,
+                "output_dir": output_dir,
+            },
+        )
+        # Assert that run is not None for type checking
+        assert run is not None, "Failed to initialize wandb run"
+        print(f"Initialized wandb run: {run.name}")
+
     # Load base model
     model, tokenizer = load_llama_model(base_model, device, disable_quantization)
 
@@ -127,9 +164,7 @@ def train_model(
         lora_alpha=lora_alpha,
         lora_dropout=0.05,
         # For Llama models, target these modules
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"]
-        if "llama" in base_model.lower()
-        else None,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
         bias="none",
         fan_in_fan_out=False,
     )
@@ -167,6 +202,9 @@ def train_model(
         mlm=False,  # for causal LM
     )
 
+    # Configure reports for wandb
+    report_to = ["wandb"] if use_wandb else []
+
     # Training arguments
     training_args = TrainingArguments(
         output_dir=output_dir,
@@ -178,16 +216,16 @@ def train_model(
         lr_scheduler_type="cosine",  # Cosine schedule with warmup
         warmup_ratio=0.05,  # Warm up for 5% of training
         weight_decay=0.01,  # L2 regularization
-        fp16=False,  # Disable fp16 to avoid unscaling issues
+        bf16=True,
         logging_steps=1,  # Log every step for small test runs
         evaluation_strategy="steps",  # Evaluate during training
-        eval_steps=5,  # Evaluate more frequently for small test runs
-        save_steps=10,
+        eval_steps=25,  # Evaluate more frequently for small test runs
+        save_steps=25,
         save_total_limit=1,  # Only save the best model to save disk space
         load_best_model_at_end=True,  # Load the best model at the end
         metric_for_best_model="eval_loss",  # Use eval loss as metric
         greater_is_better=False,  # Lower loss is better
-        report_to=[],  # avoid wandb or others by default
+        report_to=report_to,  # Use wandb if enabled
         # For quick test runs, add these options:
         max_steps=10 if num_train_epochs < 0.1 else -1,  # Limit steps for tiny test runs
         save_safetensors=False,  # Skip safetensors for testing
@@ -210,24 +248,72 @@ def train_model(
     peft_model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
 
+    # Log model as an artifact to wandb
+    if use_wandb:
+        # Get the current wandb run
+        current_run = wandb.run  # type: ignore
+        # Assert that run is not None for type checking
+        assert current_run is not None, "Wandb run is not initialized"
+
+        # Create a new wandb artifact
+        artifact = wandb.Artifact(  # type: ignore
+            name=f"model-{current_run.id}",
+            type="model",
+            description=f"Fine-tuned LoRA model on {dataset_name}",
+        )
+        # Add directory to the artifact
+        artifact.add_dir(output_dir)
+        # Log the artifact to wandb
+        wandb.log_artifact(artifact)  # type: ignore
+        # Finish the wandb run
+        wandb.finish()  # type: ignore
+
     print(f"Model saved to {output_dir}")
 
 
 def evaluate_fine_tuned_model(
-    model_path: str, dataset_name: str = "openai/gsm8k", num_samples: int = 50
-) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
+    model_path: str,
+    dataset_name: str = "openai/gsm8k",
+    num_samples: int = 50,
+    use_wandb: bool = False,
+    wandb_project: Optional[str] = "llama-grpo-math",
+    wandb_name: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """
-    Evaluate the fine-tuned model on GSM8k test set.
+    Evaluate a fine-tuned model on a specific dataset.
 
     Args:
         model_path: Path to the fine-tuned model
         dataset_name: Name of the dataset to evaluate on
         num_samples: Number of samples to evaluate
+        use_wandb: Whether to use wandb for logging
+        wandb_project: Wandb project name
+        wandb_name: Wandb run name
     """
     import torch
 
-    from src.evaluate import evaluate_on_dataset
+    from src.evaluate import StandardEvaluator
     from src.load_model import load_llama_model
+
+    # Initialize wandb if enabled
+    if use_wandb:
+        if not wandb_name:
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            model_basename = os.path.basename(model_path)
+            wandb_name = f"eval-{model_basename}-{timestamp}"
+
+        run = wandb.init(  # type: ignore
+            project=wandb_project,
+            name=wandb_name,
+            config={
+                "model_path": model_path,
+                "dataset": dataset_name,
+                "num_samples": num_samples,
+            },
+        )
+        # Assert that run is not None for type checking
+        assert run is not None, "Failed to initialize wandb run"
+        print(f"Initialized wandb run for evaluation: {run.name}")
 
     print(f"Evaluating fine-tuned model {model_path} on {dataset_name}...")
 
@@ -235,26 +321,50 @@ def evaluate_fine_tuned_model(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, tokenizer = load_llama_model(model_path, device)
 
-    # Run evaluation on the test set
-    results = evaluate_on_dataset(
-        model=model,
-        tokenizer=tokenizer,
+    # Create evaluator and run evaluation on the test set
+    evaluator = StandardEvaluator(model, tokenizer, device)
+    results = evaluator.evaluate(
         dataset_name=dataset_name,
         split="test",
-        device=device,
         max_samples=num_samples,
     )
 
     # Calculate and report accuracy
-    if isinstance(results, list):
-        correct = sum(1 for res in results if res.get("is_correct", False))
-        total = len(results)
-        accuracy = (correct / total) * 100 if total > 0 else 0
+    correct = sum(1 for res in results if res.get("is_correct", False))
+    total = len(results)
+    accuracy = (correct / total) * 100 if total > 0 else 0
 
-        print(f"Evaluation results on {dataset_name} test set:")
-        print(f"Accuracy: {accuracy:.2f}% ({correct}/{total})")
-    else:
-        print(f"Evaluation failed: {results}")
+    print(f"Evaluation results on {dataset_name} test set:")
+    print(f"Accuracy: {accuracy:.2f}% ({correct}/{total})")
+
+    # Log metrics to wandb
+    if use_wandb:
+        wandb.log(  # type: ignore
+            {
+                "accuracy": accuracy,
+                "correct": correct,
+                "total": total,
+            }
+        )
+
+        # Log detailed results as a table
+        columns = ["question", "ground_truth", "prediction", "is_correct"]
+        data = []
+        for res in results:
+            data.append(
+                [
+                    res.get("question", ""),
+                    res.get("ground_truth", ""),
+                    res.get("prediction", ""),
+                    res.get("is_correct", False),
+                ]
+            )
+
+        table = wandb.Table(columns=columns, data=data)  # type: ignore
+        wandb.log({"evaluation_results": table})  # type: ignore
+
+        # Finish the wandb run
+        wandb.finish()  # type: ignore
 
     # Return results
     return results
@@ -269,7 +379,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./model_lora_finetuned",
+        default=f"./models/lora/{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}/",
         help="Where to save the fine-tuned model",
     )
     parser.add_argument(
@@ -306,6 +416,23 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable quantization to avoid bitsandbytes dependency",
     )
+    parser.add_argument(
+        "--use_wandb",
+        action="store_true",
+        help="Whether to use Weights & Biases for experiment tracking",
+    )
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="llama-grpo-math",
+        help="Weights & Biases project name",
+    )
+    parser.add_argument(
+        "--wandb_name",
+        type=str,
+        default=None,
+        help="Weights & Biases run name, defaults to timestamp if not provided",
+    )
     return parser.parse_args()
 
 
@@ -327,6 +454,9 @@ def main() -> None:
         lora_r=args.lora_r,
         lora_alpha=args.lora_alpha,
         disable_quantization=args.disable_quantization,
+        use_wandb=args.use_wandb,
+        wandb_project=args.wandb_project,
+        wandb_name=args.wandb_name,
     )
 
     # Evaluate the fine-tuned model if requested
@@ -335,6 +465,9 @@ def main() -> None:
             model_path=args.output_dir,
             dataset_name=args.dataset_name,
             num_samples=args.eval_samples,
+            use_wandb=args.use_wandb,
+            wandb_project=args.wandb_project,
+            wandb_name=f"eval-{os.path.basename(args.output_dir)}",
         )
 
 

@@ -21,7 +21,7 @@ class TestModel(unittest.TestCase):
         mock_tokenizer.from_pretrained.return_value = mock_tok_instance
         mock_model.from_pretrained.return_value = mock_model_instance
 
-        model, tokenizer = load_llama_model("mock/llama-3.2B", device="cpu")
+        model, tokenizer = load_llama_model("meta-llama/Llama-3.2-3B", device="cpu")
 
         mock_tokenizer.from_pretrained.assert_called_once()
         mock_model.from_pretrained.assert_called_once()
