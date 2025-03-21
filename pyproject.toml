@@ -1,37 +1,41 @@
-[build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+[project]
+name = "llama-grpo-math"
+version = "0.1.0"
+description = "Fine-tuning Llama models for mathematical reasoning"
+authors = []
+requires-python = ">=3.12"
 
 [tool.poetry]
 name = "llama-grpo-math"
 version = "0.1.0"
 description = "Fine-tuning Llama models for mathematical reasoning"
-authors = ["Your Name <your.email@example.com>"]
+authors = []
 packages = [{include = "src"}]
 
 [tool.poetry.scripts]
 llama-grpo-math = "src.__main__:main"
 
 [tool.poetry.dependencies]
-python = "^3.10"
-torch = ">=2.0.0"
-transformers = ">=4.30.0"
-peft = ">=0.4.0"
-datasets = ">=2.7.0"
-accelerate = ">=0.20.0"
-tqdm = ">=4.64.0"
+python = "^3.12"
+torch = "*"
+transformers = "*"
+peft = "*"
+datasets = "*"
+accelerate = "*"
+tqdm = "*"
 sentencepiece = "*"
-bitsandbytes = ">=0.39.0"
-pandas = ">=2.0.0"
-matplotlib = ">=3.7.0"
+bitsandbytes = "*"
+pandas = "*"
+matplotlib = "*"
 
 [tool.poetry.group.dev.dependencies]
-pytest = ">=7.4.0"
-pytest-cov = ">=4.1.0"
-ruff = ">=0.1.0"
-mypy = ">=1.5.0"
-pre-commit = ">=3.3.0"
-pandas-stubs = ">=2.0.0"
+pytest = "*"
+pytest-cov = "*"
+ruff = "*"
+mypy = "*"
+pre-commit = "*"
+pandas-stubs = "*"
+isort = "*"
 
 [tool.ruff]
 line-length = 100
@@ -67,3 +71,7 @@ python_functions = "test_*"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
+
+[tool.uv]
+extra-index-url = ["https://download.pytorch.org/whl/cu124"]
+index-strategy = "unsafe-best-match"

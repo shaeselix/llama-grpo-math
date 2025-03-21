@@ -2,6 +2,7 @@ import argparse
 from typing import Tuple
 
 import torch
+from peft import PeftConfig, PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # Example: for demonstration, a placeholder model_name
@@ -11,7 +12,7 @@ DEFAULT_MODEL_NAME = "meta-llama/Llama-3.2-3B"
 def load_llama_model(
     model_name: str = DEFAULT_MODEL_NAME,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
-    disable_quantization: bool = False,
+    disable_quantization: bool = True,
 ) -> Tuple[AutoModelForCausalLM, AutoTokenizer]:
     print(f"Loading model: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -40,7 +41,11 @@ def load_llama_model(
             print("Falling back to standard loading")
 
     # By default, trust_remote_code=False unless needed for custom architectures.
-    model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
+    model = AutoModelForCausalLM.from_pretrained(DEFAULT_MODEL_NAME, **model_kwargs)
+    if model_name != DEFAULT_MODEL_NAME:
+        PeftConfig.from_pretrained(model_name)
+        model = PeftModel.from_pretrained(model, model_name)
+        model = model.merge_and_unload()
 
     if device != "auto" and not model_kwargs.get("device_map"):
         model = model.to(device)

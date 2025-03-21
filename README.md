@@ -61,6 +61,11 @@ python -m src.evaluate \
   --visualize
 ```
 
+```bash
+uv run --with-requirements requirements.txt python -m src.evaluate --model_name_or_path /home/ubuntu/grpo/llama-grpo-math/models/lora/2025-03-12_22-08-34/checkpoint-200
+ --test_gsm8k --max_samples 2000 --visualize --vllm
+```
+
 ## Development
 
 ### Code Quality Tools

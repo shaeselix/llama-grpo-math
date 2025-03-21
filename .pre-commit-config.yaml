@@ -24,7 +24,7 @@ repos:
       - id: mypy
         additional_dependencies: [pandas-stubs]
         files: ^src/
-        args: [--ignore-missing-imports]
+        args: [--config-file=mypy.ini]
 
   - repo: https://github.com/pycqa/isort
     rev: 5.13.2
